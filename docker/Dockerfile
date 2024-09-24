@@ -3,7 +3,6 @@ FROM alpine/git:latest as source_fetch
 RUN git clone https://github.com/DiamondLightSource/pvws.git /pvws
 ARG GIT_TAG=main
 RUN cd /pvws && git checkout ${GIT_TAG}
-ADD pom.xml /pvws/pom.xml
 
 FROM maven:3.8.7-eclipse-temurin-17 as maven_builder
 
