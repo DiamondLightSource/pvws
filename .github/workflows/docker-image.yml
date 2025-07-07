@@ -1,15 +1,83 @@
 name: Docker Image CI
 
 on:
-  push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
+  push: 
+  workflow_dispatch:
 
 jobs:
-  build:
+  build_container:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v3
-    - name: Build the Docker image
-      run: docker compose build
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Need this to get version number from last tag
+          fetch-depth: 0
+
+      - name: Validate SemVer2 version compliance
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          SEMVER_REGEX: ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$
+
+        run: |
+          ref="${{ github.ref_name }}"
+          my_regex="${{env.SEMVER_REGEX}}"
+          if [[ "$ref" =~ $my_regex ]]; then
+            echo "SemVer compliant version: $ref"
+          else
+            echo "Invalid SemVer version: $ref"
+            exit 1
+          fi
+
+      # Fetch latest tag on this branch if manually triggered
+      - name: Fetch latest tag
+        if: github.event_name == 'workflow_dispatch'
+        run: echo "LATEST_TAG=$(git tag | sort --version-sort | tail -n1)" >> $GITHUB_ENV
+
+      - name: Set up Docker Buildx
+        id: buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Docker Registry
+        if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and export to Docker local cache
+        uses: docker/build-push-action@v6
+        env:
+          DOCKER_BUILD_RECORD_UPLOAD: false
+        with:
+          context: ./docker
+          # Need load and tags so we can test it below
+          load: true
+          tags: tag_for_testing
+
+      - name: Test cli works in cached runtime image
+        run: docker run --rm tag_for_testing --version
+
+      - name: Create tags for publishing image
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=ref,event=tag
+            type=raw,value=latest
+            type=semver,pattern={{version}},value=${{ env.LATEST_TAG }},enable=${{github.event_name == 'workflow_dispatch'}}
+
+      - name: Push cached image to container registry
+        if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
+        uses: docker/build-push-action@v6
+        env:
+          DOCKER_BUILD_RECORD_UPLOAD: false
+        # This does not build the image again, it will find the image in the
+        # Docker cache and publish it
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
