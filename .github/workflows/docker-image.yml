@@ -51,8 +51,7 @@ jobs:
         env:
           DOCKER_BUILD_RECORD_UPLOAD: false
         with:
-          context: .
-          file: ./docker/Dockerfile
+          context: ./docker
           # Need load and tags so we can test it below
           load: true
           tags: tag_for_testing
